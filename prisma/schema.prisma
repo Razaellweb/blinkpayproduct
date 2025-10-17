@@ -1,0 +1,227 @@
+// Prisma schema for BlinkPay backend
+// PostgreSQL datasource
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  VENDOR
+  CONSUMER
+}
+
+enum KycStatus {
+  UNVERIFIED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum WalletStatus {
+  ACTIVE
+  FROZEN
+  CLOSED
+}
+
+enum TransactionType {
+  TOPUP
+  TRANSFER_OUT
+  TRANSFER_IN
+  BILL_PAYMENT
+  SPEND_REDEEM
+  SPEND_GENERATE
+  REFUND
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELED
+}
+
+model User {
+  id             String     @id @default(cuid())
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  email          String?    @unique
+  phone          String?    @unique
+  passwordHash   String
+  pinHash        String?
+  role           Role       @default(CONSUMER)
+  kycStatus      KycStatus  @default(UNVERIFIED)
+  firstName      String?
+  lastName       String?
+  displayName    String?
+  bvnEncrypted   String?    // AES-256 encrypted
+  ninEncrypted   String?    // AES-256 encrypted
+  isTwoFAEnabled Boolean    @default(false)
+  twoFAChannel   String?    // sms/email
+  wallets        Wallet[]
+  sessions       Session[]
+  otps           Otp[]
+  auditLogs      AuditLog[]
+  kycSubmissions KycSubmission[]
+  vendorProfile  VendorProfile?
+  billPayments   BillPayment[]
+
+  @@index([role])
+  @@index([kycStatus])
+  @@index([createdAt])
+}
+
+model VendorProfile {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  businessName String
+  cacNumber    String?
+  tin          String?
+  branches     Json?
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  refreshToken String   @unique
+  user         User     @relation(fields: [userId], references: [id])
+  expiresAt    DateTime
+  userAgent    String?
+  ipAddress    String?
+
+  @@index([userId])
+}
+
+model Otp {
+  id        String   @id @default(cuid())
+  userId    String?
+  channel   String   // sms/email
+  target    String   // phone/email
+  code      String
+  purpose   String   // login, reset, transfer
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  user      User?    @relation(fields: [userId], references: [id])
+
+  @@index([target, purpose])
+  @@index([createdAt])
+}
+
+model Wallet {
+  id          String        @id @default(cuid())
+  userId      String
+  status      WalletStatus  @default(ACTIVE)
+  balanceKobo BigInt        @default(0) @db.BigInt
+  currency    String        @default("NGN")
+  categories  Json?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  user        User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+  spendCodes   SpendCode[]
+  billPayments BillPayment[]
+
+  @@index([userId])
+}
+
+model Transaction {
+  id            String            @id @default(cuid())
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  walletId      String
+  type          TransactionType
+  status        TransactionStatus @default(PENDING)
+  amountKobo    BigInt            @db.BigInt
+  feeKobo       BigInt            @default(0) @db.BigInt
+  currency      String            @default("NGN")
+  reference     String            @unique
+  description   String?
+  metadata      Json?
+  counterpartyWalletId String?
+  wallet        Wallet            @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, createdAt])
+}
+
+model KycSubmission {
+  id          String    @id @default(cuid())
+  userId      String
+  method      String    // BVN or NIN
+  status      KycStatus @default(PENDING)
+  provider    String    // QoreID/VerifyMe/IdentityPass
+  requestRef  String    @unique
+  responseRaw Json?
+  reason      String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model BillPayment {
+  id          String            @id @default(cuid())
+  userId      String
+  walletId    String
+  provider    String
+  productCode String
+  amountKobo  BigInt            @db.BigInt
+  feeKobo     BigInt            @default(0) @db.BigInt
+  status      TransactionStatus @default(PENDING)
+  reference   String            @unique
+  receipt     Json?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  user        User              @relation(fields: [userId], references: [id])
+  wallet      Wallet            @relation(fields: [walletId], references: [id])
+
+  @@index([userId, createdAt])
+}
+
+model SpendCode {
+  id          String   @id @default(cuid())
+  walletId    String
+  code        String   @unique
+  amountKobo  BigInt   @db.BigInt
+  expiresAt   DateTime
+  redeemedAt  DateTime?
+  offline     Boolean  @default(false)
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  wallet      Wallet   @relation(fields: [walletId], references: [id])
+
+  @@index([walletId, createdAt])
+}
+
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  requestHash String
+  status      String
+  response    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  entityType  String?
+  entityId    String?
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  user        User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+}

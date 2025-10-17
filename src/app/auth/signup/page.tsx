@@ -1,14 +1,32 @@
 "use client";
 import { useState } from "react";
 import { Mail, Phone, ShieldCheck } from "lucide-react";
+import { apiPost, setTokens } from "@/lib/api/client";
 
 export default function Signup() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [agree, setAgree] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const strength = Math.min(100, (password.length * 10));
-  const valid = (email || phone) && password.length >= 6 && agree;
+  const valid = (email || phone) && password.length >= 8 && agree;
+
+  async function onSignup() {
+    try {
+      setLoading(true); setError("")
+      const res = await apiPost('/api/v1/auth/signup', { email: email || undefined, phone: phone || undefined, password, role: 'CONSUMER' })
+      const data = (res as any).data
+      setTokens({ accessToken: data.accessToken, refreshToken: data.refreshToken })
+      window.location.href = '/dashboard'
+    } catch (e: any) {
+      setError(e?.message || 'Failed to sign up')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="grid min-h-screen place-items-center p-6">
       <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-[--color-border] bg-[--color-card] p-6 shadow-xl">
@@ -29,9 +47,10 @@ export default function Signup() {
             <div className="h-1 rounded-full bg-gradient-to-r from-[#1d4ed8] via-[#0f766e] to-[#f59e0b]" style={{width: `${strength}%`}} />
           </div>
           <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={agree} onChange={(e)=>setAgree(e.target.checked)} /> I agree to the terms</label>
-          <button disabled={!valid} onClick={()=>{window.location.href='/auth/signin'}} className="rounded-lg bg-gradient-to-r from-[#1d4ed8] to-[#0f766e] px-4 py-2 text-white disabled:opacity-50">Create account</button>
+          {error && <div className="rounded-lg border border-rose-300 bg-rose-50 p-2 text-xs text-rose-700">{error}</div>}
+          <button disabled={!valid || loading} onClick={onSignup} className="rounded-lg bg-gradient-to-r from-[#1d4ed8] to-[#0f766e] px-4 py-2 text-white disabled:opacity-50">{loading ? 'Creating...' : 'Create account'}</button>
           <p className="text-xs text-muted-foreground">Already have an account? <a className="underline" href="/auth/signin">Sign in</a></p>
-          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck className="h-4 w-4" /> Bank‑grade security. PCI‑DSS practices.</div>
+          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground"><ShieldCheck className="h-4 w-4" /> Bankgrade security. PCIDSS practices.</div>
         </div>
       </div>
     </div>
