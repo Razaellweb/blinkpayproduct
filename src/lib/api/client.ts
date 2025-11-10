@@ -51,7 +51,8 @@ async function request<T = any>(input: string, init: RequestInit & { retryOn401?
     const newToken = await refreshAccessTokenOnce()
     if (newToken) {
       headers.set('Authorization', `Bearer ${newToken}`)
-      const retry = await fetch(input, { ...init, headers, retryOn401: false })
+      const { retryOn401: _, ...initWithoutRetry } = init
+      const retry = await fetch(input, { ...initWithoutRetry, headers })
       return parseJson<T>(retry)
     }
   }
