@@ -20,6 +20,7 @@
     "lucide-react": "^0.541.0",
     "nanoid": "^5.1.6",
     "next": "15.4.5",
+    "next-safe-middleware": "^5.2.0",
     "paystack-sdk": "^3.0.0",
     "prisma": "^6.17.1",
     "react": "19.1.0",
