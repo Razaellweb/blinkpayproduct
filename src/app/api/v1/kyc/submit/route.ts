@@ -5,12 +5,17 @@ import { badRequest, ok, serverError } from '@/lib/utils/responses'
 import { prisma } from '@/lib/db/prisma'
 import { QoreIdClient } from '@/lib/kyc/quore-id'
 import { encrypt } from '@/lib/security/crypto'
+import { Prisma } from '@prisma/client'
 
 function getQoreId() {
   const clientId = process.env.QOREID_CLIENT_ID!
   const secret = process.env.QOREID_CLIENT_SECRET!
   if (!clientId || !secret) throw new Error('QoreID env not set')
-  return new QoreIdClient({ baseURL: process.env.QOREID_BASE_URL || 'https://api.qoreid.com', clientId, clientSecret: secret })
+  return new QoreIdClient({
+    baseURL: process.env.QOREID_BASE_URL || 'https://api.qoreid.com',
+    clientId,
+    clientSecret: secret
+  })
 }
 
 export async function POST(req: NextRequest) {
@@ -26,13 +31,28 @@ export async function POST(req: NextRequest) {
     let response: unknown
     if (method === 'BVN') {
       response = await client.verifyBvnBasic(value, {})
-      await prisma.user.update({ where: { id: auth.sub }, data: { bvnEncrypted: encrypt(value), kycStatus: 'PENDING' } })
+      await prisma.user.update({
+        where: { id: auth.sub },
+        data: { bvnEncrypted: encrypt(value), kycStatus: 'PENDING' }
+      })
     } else {
       response = await client.verifyNin(value, {})
-      await prisma.user.update({ where: { id: auth.sub }, data: { ninEncrypted: encrypt(value), kycStatus: 'PENDING' } })
+      await prisma.user.update({
+        where: { id: auth.sub },
+        data: { ninEncrypted: encrypt(value), kycStatus: 'PENDING' }
+      })
     }
 
-    const sub = await prisma.kycSubmission.create({ data: { userId: auth.sub, method, provider: 'QOREID', requestRef: `QID_${Date.now()}`, responseRaw: response } })
+    // Cast response to Prisma.InputJsonValue to satisfy type checking
+    const sub = await prisma.kycSubmission.create({
+      data: {
+        userId: auth.sub,
+        method,
+        provider: 'QOREID',
+        requestRef: `QID_${Date.now()}`,
+        responseRaw: response as Prisma.InputJsonValue
+      }
+    })
 
     return ok({ submissionId: sub.id, status: sub.status })
   } catch (error) {
