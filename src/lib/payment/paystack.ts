@@ -1,6 +1,6 @@
 // paystack.provider.ts
 import { PaymentProvider, InitPayment, InitRefund } from "./interface";
-import PayStackSDK from "paystack-sdk";
+import * as PayStackSDK from 'paystack-sdk'; // ✅
 
 export class PaystackProvider implements PaymentProvider {
   constructor() {
