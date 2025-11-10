@@ -9,6 +9,7 @@ import { getOrCreateIdempotency, completeIdempotency, hashRequest, failIdempoten
 import { rateLimit } from '@/lib/security/rate-limit'
 import { Providus } from '@/lib/payment/providus'
 import { verifyOtp } from '@/lib/services/otp'
+import { Prisma } from '@prisma/client'
 
 export async function POST(req: NextRequest) {
   const rl = rateLimit(req, 'wallet:transfer')
@@ -23,6 +24,7 @@ export async function POST(req: NextRequest) {
     const user = await prisma.user.findUnique({ where: { id: auth.sub } })
     if (!user) return badRequest('user not found')
 
+    // OTP verification if 2FA enabled
     if (user.isTwoFAEnabled) {
       const otp = parsed.data.otp
       const target = user.phone || user.email
@@ -37,6 +39,7 @@ export async function POST(req: NextRequest) {
     const amountKobo = kobo(parsed.data.amount)
     if (senderWallet.balanceKobo < amountKobo) return badRequest('insufficient balance')
 
+    // Idempotency
     const idk = req.headers.get('Idempotency-Key') || genRef('IDEMP')
     const reqHash = await hashRequest(parsed.data)
     await getOrCreateIdempotency(idk, reqHash)
@@ -44,7 +47,7 @@ export async function POST(req: NextRequest) {
     const isBankTransfer = !!(parsed.data.bankAccountNumber && parsed.data.bankCode)
 
     if (!isBankTransfer) {
-      // P2P path
+      // P2P transfer
       let recipientWalletId: string | null = null
       if (parsed.data.toWalletId) recipientWalletId = parsed.data.toWalletId
       else if (parsed.data.toUserId) {
@@ -57,7 +60,9 @@ export async function POST(req: NextRequest) {
 
       const ref = genRef('P2P')
 
-      const txHourly = await prisma.transaction.count({ where: { walletId: senderWallet.id, createdAt: { gte: new Date(Date.now() - 60*60*1000) } } })
+      const txHourly = await prisma.transaction.count({
+        where: { walletId: senderWallet.id, createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } }
+      })
       const score = scoreTransaction({ amountKobo, txPerHour: txHourly })
       if (score >= 70) return badRequest('transfer flagged for review')
 
@@ -65,8 +70,28 @@ export async function POST(req: NextRequest) {
         await db.wallet.update({ where: { id: senderWallet.id }, data: { balanceKobo: { decrement: amountKobo } } })
         await db.wallet.update({ where: { id: recipientWalletId! }, data: { balanceKobo: { increment: amountKobo } } })
 
-        await db.transaction.create({ data: { walletId: senderWallet.id, type: 'TRANSFER_OUT', status: 'SUCCESS', amountKobo, reference: ref, description: parsed.data.description, counterpartyWalletId: recipientWalletId! } })
-        await db.transaction.create({ data: { walletId: recipientWalletId!, type: 'TRANSFER_IN', status: 'SUCCESS', amountKobo, reference: ref, description: parsed.data.description, counterpartyWalletId: senderWallet.id } })
+        await db.transaction.create({
+          data: {
+            walletId: senderWallet.id,
+            type: 'TRANSFER_OUT',
+            status: 'SUCCESS',
+            amountKobo,
+            reference: ref,
+            description: parsed.data.description,
+            counterpartyWalletId: recipientWalletId!
+          }
+        })
+        await db.transaction.create({
+          data: {
+            walletId: recipientWalletId!,
+            type: 'TRANSFER_IN',
+            status: 'SUCCESS',
+            amountKobo,
+            reference: ref,
+            description: parsed.data.description,
+            counterpartyWalletId: senderWallet.id
+          }
+        })
       })
 
       await completeIdempotency(idk, { reference: ref })
@@ -78,14 +103,28 @@ export async function POST(req: NextRequest) {
 
     await prisma.$transaction(async (db) => {
       await db.wallet.update({ where: { id: senderWallet.id }, data: { balanceKobo: { decrement: amountKobo } } })
-      await db.transaction.create({ data: { walletId: senderWallet.id, type: 'TRANSFER_OUT', status: 'PENDING', amountKobo, reference: ref, description: parsed.data.description, metadata: { bankCode: parsed.data.bankCode, accountNumber: parsed.data.bankAccountNumber, accountName: parsed.data.bankAccountName } } })
+      await db.transaction.create({
+        data: {
+          walletId: senderWallet.id,
+          type: 'TRANSFER_OUT',
+          status: 'PENDING',
+          amountKobo,
+          reference: ref,
+          description: parsed.data.description,
+          metadata: {
+            bankCode: parsed.data.bankCode,
+            accountNumber: parsed.data.bankAccountNumber,
+            accountName: parsed.data.bankAccountName
+          } as Prisma.InputJsonValue
+        }
+      })
     })
 
     try {
       const providus = new Providus()
       const payload = {
         beneficiaryAccountName: parsed.data.bankAccountName || 'Beneficiary',
-        transactionAmount: (parsed.data.amount).toFixed(2),
+        transactionAmount: parsed.data.amount.toFixed(2),
         currencyCode: process.env.PROVIDUS_CURRENCY_CODE || '566',
         narration: parsed.data.description || 'BlinkPay transfer',
         sourceAccountName: 'BlinkPay Wallet',
@@ -96,23 +135,33 @@ export async function POST(req: NextRequest) {
         password: process.env.PROVIDUS_PASSWORD || '',
       }
       const resp = await providus.nIPFundTransfer(payload as any)
+
       if ((resp as any).responseCode && (resp as any).responseCode !== '00') {
         // failure
         await prisma.$transaction(async (db) => {
           await db.wallet.update({ where: { id: senderWallet.id }, data: { balanceKobo: { increment: amountKobo } } })
-          await db.transaction.update({ where: { reference: ref }, data: { status: 'FAILED', metadata: resp } })
+          await db.transaction.update({
+            where: { reference: ref },
+            data: { status: 'FAILED', metadata: resp as Prisma.InputJsonValue }
+          })
         })
         await failIdempotency(idk, 'bank transfer failed')
         return badRequest('bank transfer failed')
       }
 
-      await prisma.transaction.update({ where: { reference: ref }, data: { status: 'SUCCESS' } })
+      await prisma.transaction.update({
+        where: { reference: ref },
+        data: { status: 'SUCCESS', metadata: resp as Prisma.InputJsonValue }
+      })
       await completeIdempotency(idk, { reference: ref })
       return ok({ reference: ref, status: 'SUCCESS' })
     } catch (e) {
       await prisma.$transaction(async (db) => {
         await db.wallet.update({ where: { id: senderWallet.id }, data: { balanceKobo: { increment: amountKobo } } })
-        await db.transaction.update({ where: { reference: ref }, data: { status: 'FAILED', metadata: { error: String(e) } } })
+        await db.transaction.update({
+          where: { reference: ref },
+          data: { status: 'FAILED', metadata: { error: String(e) } as Prisma.InputJsonValue }
+        })
       })
       await failIdempotency(idk, 'bank transfer error')
       return serverError('failed to process bank transfer')
