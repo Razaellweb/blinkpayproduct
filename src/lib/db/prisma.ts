@@ -14,10 +14,10 @@ export const prisma =
 
 if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
 
-prisma.$on('query', (e) => {
-  if (process.env.DEBUG_SQL === '1') {
+if (process.env.DEBUG_SQL === '1') {
+  prisma.$on('query' as never, (e: any) => {
     console.log('Query: ' + e.query)
     console.log('Params: ' + e.params)
     console.log('Duration: ' + e.duration + 'ms')
-  }
-})
+  })
+}
