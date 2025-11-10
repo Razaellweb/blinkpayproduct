@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/prisma'
+import { Prisma } from '@prisma/client'
 import crypto from 'crypto'
 import { getPaymentService } from '@/lib/services/payments'
 
@@ -30,8 +31,8 @@ export async function POST(req: NextRequest) {
       if (verify.status !== 'success') return NextResponse.json({ ok: true })
 
       await prisma.$transaction(async (db) => {
-        await db.transaction.update({ where: { id: tx.id }, data: { status: 'SUCCESS', metadata: verify } })
-        await db.wallet.update({ where: { id: tx.walletId }, data: { balanceKobo: { increment: tx.amountKobo } } })
+  await db.transaction.update({ where: { id: tx.id }, data: { status: 'SUCCESS', metadata: verify as unknown as Prisma.InputJsonValue } })
+  await db.wallet.update({ where: { id: tx.walletId }, data: { balanceKobo: { increment: tx.amountKobo } } })
       })
     }
     return NextResponse.json({ ok: true })
