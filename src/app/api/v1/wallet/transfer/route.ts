@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
           await db.wallet.update({ where: { id: senderWallet.id }, data: { balanceKobo: { increment: amountKobo } } })
           await db.transaction.update({
             where: { reference: ref },
-            data: { status: 'FAILED', metadata: resp as Prisma.InputJsonValue }
+            data: { status: 'FAILED', metadata: resp as unknown as Prisma.InputJsonValue }
           })
         })
         await failIdempotency(idk, 'bank transfer failed')
@@ -151,7 +151,7 @@ export async function POST(req: NextRequest) {
 
       await prisma.transaction.update({
         where: { reference: ref },
-        data: { status: 'SUCCESS', metadata: resp as Prisma.InputJsonValue }
+        data: { status: 'SUCCESS', metadata: resp as unknown as Prisma.InputJsonValue }
       })
       await completeIdempotency(idk, { reference: ref })
       return ok({ reference: ref, status: 'SUCCESS' })
